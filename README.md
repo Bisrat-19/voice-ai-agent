@@ -1,94 +1,155 @@
 # ABC Home Services — Voice AI Receptionist
 
-Voice assistant backend (Vapi + Twilio) with PostgreSQL and a React dashboard.
+Production-style backend for an AI phone receptionist. Inbound calls are handled by **Vapi** (connected to **Twilio**). When a call ends, Vapi sends a webhook to this project, which extracts structured data and stores it in **PostgreSQL**. A **React** dashboard displays call records.
+
+## Tech stack
+
+| Layer | Technology |
+|-------|------------|
+| Voice AI | [Vapi](https://vapi.ai) + [Twilio](https://twilio.com) (configured separately) |
+| Backend | Node.js, TypeScript, Express |
+| Database | PostgreSQL (`pg`) |
+| Frontend | React, Vite, TypeScript |
+| Infrastructure | Docker, Docker Compose, ngrok |
 
 ## Architecture
 
 ```
-Phone → Twilio → Vapi → ngrok → Backend (webhook)
-                              ↓
-                         PostgreSQL
-                              ↑
-                    React dashboard (nginx)
+Caller → Twilio → Vapi Assistant
+                      ↓ (end-of-call webhook)
+                 ngrok → Express API → PostgreSQL
+                      ↑
+              React dashboard (reads /api/calls)
 ```
 
-## Run everything (Docker)
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [ngrok](https://ngrok.com) account and [authtoken](https://dashboard.ngrok.com/get-started/your-authtoken)
+- Vapi assistant with Twilio number (already set up for this project)
+
+## Setup and run
+
+**1. Clone and configure environment**
 
 ```bash
-cp .env.example .env    # add NGROK_AUTHTOKEN
+git clone <repository-url>
+cd voice-ai-agent
+cp .env.example .env
+```
+
+Edit `.env` and set your ngrok authtoken:
+
+```
+NGROK_AUTHTOKEN=your_token_here
+```
+
+**2. Start all services**
+
+```bash
 docker compose up --build
 ```
 
+**3. Open the application**
+
 | Service | URL |
 |---------|-----|
-| **Dashboard (React)** | http://localhost:8080 |
-| **Backend API** | http://localhost:3000 |
-| **Health** | http://localhost:3000/health |
-| **Webhook** | `POST http://localhost:3000/vapi/call-ended` |
-| **ngrok inspector** | http://localhost:4040 |
-| **PostgreSQL** | `localhost:5432` (db: `voice_ai`) |
+| Dashboard | http://localhost:8080 |
+| Backend API | http://localhost:3000 |
+| Health check | http://localhost:3000/health |
+| ngrok inspector | http://localhost:4040 |
 
-Vapi **Server URL** (use ngrok HTTPS URL from http://localhost:4040/status):
+**4. Connect Vapi to the webhook**
 
-```
-https://<ngrok-host>/vapi/call-ended
-```
+1. Open http://localhost:4040/status and copy the **HTTPS** forwarding URL.
+2. In the [Vapi Dashboard](https://dashboard.vapi.ai), open your assistant → **Advanced** → **Server URL**.
+3. Set:
 
-## Test without a phone call
+   ```
+   https://<your-ngrok-host>/vapi/call-ended
+   ```
+
+4. Save and publish the assistant.
+
+## Verify it works
+
+**Without a phone call** — send a test webhook:
 
 ```bash
-curl -s -X POST http://localhost:3000/vapi/call-ended \
+curl -X POST http://localhost:3000/vapi/call-ended \
   -H "Content-Type: application/json" \
   -d '{
     "callId": "test_001",
     "callerPhone": "+15551234567",
-    "summary": "HVAC repair tomorrow in Denver.",
-    "transcript": "My name is John. AC broken tomorrow morning in Denver."
-  }' | jq
+    "summary": "Customer needs HVAC repair tomorrow in Denver.",
+    "transcript": "Caller: My name is John. AC stopped working tomorrow morning in Denver."
+  }'
 ```
 
-Refresh http://localhost:8080 — the call appears in the dashboard.
+Refresh http://localhost:8080 — the call should appear in the dashboard.
 
-## Local development (without Docker)
+**With a phone call** — call your Twilio number, complete a conversation, hang up, then check the dashboard and ngrok inspector (`POST /vapi/call-ended` → `200`).
 
-**Terminal 1 — database + API:**
-```bash
-docker compose up postgres -d
-cd backend && cp .env.example .env && npm install && npm run dev
-```
+## Database access
 
-**Terminal 2 — React:**
-```bash
-cd frontend && npm install && npm run dev
-```
+Use any PostgreSQL client (e.g. TablePlus, `psql`):
 
-Open http://localhost:5173 (Vite proxies `/api` to backend).
-
-## Database (TablePlus)
-
-| Field | Value |
-|-------|--------|
+| Setting | Value |
+|---------|--------|
 | Host | `localhost` |
 | Port | `5432` |
-| User / Password | `postgres` / `postgres` |
 | Database | `voice_ai` |
+| User / Password | `postgres` / `postgres` |
 | Table | `calls` |
+
+## API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Service and database health |
+| `POST` | `/vapi/call-ended` | Vapi end-of-call webhook |
+| `GET` | `/api/calls?page=1&limit=20` | List stored calls |
 
 ## Project structure
 
 ```
 voice-ai-agent/
-├── frontend/          # React + Vite dashboard (port 8080 in Docker)
-├── backend/           # Express API + webhook (port 3000)
-├── docker-compose.yml
+├── backend/              # Express API, webhook handler, extraction logic
+│   ├── src/
+│   └── Dockerfile
+├── frontend/             # React dashboard
+│   ├── src/
+│   └── Dockerfile
+├── docker-compose.yml    # postgres, backend, frontend, ngrok
 ├── ngrok.yml
 └── .env.example
 ```
 
-## API
+## Local development (optional)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/calls` | List calls (paginated) |
-| POST | `/vapi/call-ended` | Vapi end-of-call webhook |
-| GET | `/health` | Health check |
+Run Postgres in Docker, then start backend and frontend separately:
+
+```bash
+docker compose up postgres -d
+
+cd backend && cp .env.example .env && npm install && npm run dev
+cd frontend && npm install && npm run dev
+```
+
+- API: http://localhost:3000  
+- Dashboard: http://localhost:5173 (proxies `/api` to the backend)
+
+## Notes
+
+- The ngrok URL changes when containers restart; update the Vapi Server URL if needed.
+- Webhook payloads are normalized for Vapi `end-of-call-report` events and flat test JSON.
+- Structured fields (`intent`, `service_needed`, `is_emergency`, etc.) are extracted with keyword/regex rules defined in `backend/src/data/business.ts` — not a second LLM call.
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| ngrok container fails | Set `NGROK_AUTHTOKEN` in root `.env` |
+| Dashboard shows “Offline” | Ensure `backend` is running: `docker compose ps` |
+| No rows after a call | Confirm Vapi Server URL uses current ngrok HTTPS host + `/vapi/call-ended` |
+| Empty `calls` table | Run the test `curl` above or complete a call and hang up |
