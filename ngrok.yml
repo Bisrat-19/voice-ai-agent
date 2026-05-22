@@ -1,0 +1,6 @@
+version: 3
+# Authtoken is read from NGROK_AUTHTOKEN env (set in root .env)
+endpoints:
+  - name: backend
+    upstream:
+      url: http://backend:3000
