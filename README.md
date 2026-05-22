@@ -38,11 +38,20 @@ cd voice-ai-agent
 cp .env.example .env
 ```
 
-Edit `.env` and set your ngrok authtoken:
+Edit root `.env` and set your ngrok authtoken:
 
 ```
 NGROK_AUTHTOKEN=your_token_here
 ```
+
+**Environment files**
+
+| File | Purpose |
+|------|---------|
+| `.env.example` (root) | Template for **Docker Compose / ngrok** — copy to `.env` at project root |
+| `backend/.env.example` | Template for **local backend dev** (`npm run dev`) — copy to `backend/.env` |
+
+Do not commit real `.env` files (they are gitignored).
 
 **2. Start all services**
 
@@ -132,7 +141,7 @@ Run Postgres in Docker, then start backend and frontend separately:
 ```bash
 docker compose up postgres -d
 
-cd backend && cp .env.example .env && npm install && npm run dev
+cd backend && cp .env.example .env && npm install && npm run dev   # uses backend/.env
 cd frontend && npm install && npm run dev
 ```
 
