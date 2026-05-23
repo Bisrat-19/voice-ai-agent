@@ -1,4 +1,5 @@
 import { businessData } from "../data/business";
+import { sanitizeTranscript } from "./callQuality";
 import { detectEmergency } from "./emergency";
 import { classifyIntent } from "./intent";
 import type { StructuredCallData } from "../types";
@@ -25,6 +26,10 @@ const NAME_BLOCKLIST = new Set([
   "caller",
   "user",
   "customer",
+  "marking",
+  "this",
+  "urgent",
+  "emergency",
 ]);
 
 const TIME_PATTERNS = [
@@ -232,7 +237,7 @@ export function extractStructuredData(
   payload: VapiCallEndedPayload
 ): StructuredCallData {
   const summary = payload.summary ?? "";
-  const transcript = payload.transcript ?? "";
+  const transcript = sanitizeTranscript(payload.transcript ?? "");
   const combined = `${summary}\n${transcript}`.trim();
 
   const isEmergency = detectEmergency(combined);

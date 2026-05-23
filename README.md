@@ -160,3 +160,5 @@ cd frontend && npm install && npm run dev
 | Dashboard shows “Offline” | Ensure `backend` is running: `docker compose ps` |
 | No rows after a call | Confirm Vapi Server URL uses current ngrok HTTPS host + `/vapi/call-ended` |
 | Empty `calls` table | Run the test `curl` above or complete a call and hang up |
+| Duplicate or junk rows | Rebuild backend (`docker compose up --build`). Only `end-of-call-report` is stored; system-prompt-only payloads are ignored. Remove bad rows with `DELETE FROM calls WHERE transcript LIKE '%You are a voice receptionist%';` |
+| Too many webhooks in ngrok | Normal — Vapi sends `conversation-update`, `status-update`, etc. They return `200` with `skipped: true` and are not saved |

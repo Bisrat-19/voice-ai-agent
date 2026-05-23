@@ -19,14 +19,8 @@ export function validateCallEndedPayload(
 
   if (!normalized) {
     const message = (body as Record<string, unknown>).message;
-    const type =
-      message &&
-      typeof message === "object" &&
-      typeof (message as Record<string, unknown>).type === "string"
-        ? (message as Record<string, unknown>).type
-        : null;
 
-    if (type && type !== "end-of-call-report") {
+    if (message && typeof message === "object") {
       return { valid: true, skipped: true, errors: [] };
     }
 
