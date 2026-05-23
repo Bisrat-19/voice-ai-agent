@@ -7,6 +7,8 @@ import { insertCall } from "../services/database.service";
 import { AppError } from "../middleware/errorHandler";
 import { logInfo } from "../utils/logger";
 import { getVapiWebhookEventType } from "../utils/vapiWebhook";
+import { extractCallerText } from "../utils/transcriptParse";
+import { sanitizeTranscript } from "../utils/callQuality";
 
 export async function handleCallEnded(req: Request, res: Response): Promise<void> {
   const eventType = getVapiWebhookEventType(req.body);
@@ -36,11 +38,16 @@ export async function handleCallEnded(req: Request, res: Response): Promise<void
     res.status(200).json({ success: true, skipped: true, reason: "no-call-content", callId: payload.callId });
     return;
   }
-  const combined = `${payload.summary ?? ""} ${payload.transcript ?? ""}`.trim();
   const structured = extractStructuredData(payload);
-  const emergencyKeywords = getMatchedEmergencyKeywords(combined);
+  const callerText =
+    extractCallerText(sanitizeTranscript(payload.transcript ?? "")) ||
+    sanitizeTranscript(payload.transcript ?? "");
+  const pricingSource = `${callerText} ${payload.summary ?? ""}`.trim();
+  const emergencyKeywords = getMatchedEmergencyKeywords(
+    `${callerText} ${payload.summary ?? ""}`.trim()
+  );
   const pricing =
-    structured.intent === "pricing_question" ? lookupPricing(combined) : null;
+    structured.intent === "pricing_question" ? lookupPricing(pricingSource) : null;
 
   logInfo("Call stored", {
     requestId: req.requestId,

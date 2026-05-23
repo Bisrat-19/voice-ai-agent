@@ -24,9 +24,9 @@ const INTENT_PATTERNS: { intent: SupportedIntent; patterns: RegExp[] }[] = [
       /\bcome out\b/i,
       /\bsend someone\b/i,
       /\bvisit\b/i,
-      /\brepair\b/i,
-      /\bfixed\b/i,
-      /\binstall\b/i,
+      /\b(need|want).*(repair|fixed|install)/i,
+      /\b(ac|a\/c|air condition|furnace|heater).*(not working|broken|stopped)/i,
+      /\bcan someone come\b/i,
     ],
   },
   {

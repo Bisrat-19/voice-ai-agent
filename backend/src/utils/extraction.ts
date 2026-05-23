@@ -2,13 +2,24 @@ import { businessData } from "../data/business";
 import { sanitizeTranscript } from "./callQuality";
 import { detectEmergency } from "./emergency";
 import { classifyIntent } from "./intent";
+import { extractCallerText } from "./transcriptParse";
 import type { StructuredCallData } from "../types";
 import type { VapiCallEndedPayload } from "../types";
 
 const PHONE_REGEX = /(\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/;
 
+/** Speech fillers between intro phrase and name (e.g. "my name is, uh, Michael") */
+const NAME_FILLER = "(?:,\\s*(?:uh|um|er|like|you know))*";
+
 const NAME_PATTERNS = [
-  /(?:my name is|this is|i'm|i am|name is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+  new RegExp(
+    `\\bmy name(?:'s| is)${NAME_FILLER}\\s*,?\\s*([a-zA-Z][a-zA-Z'-]*(?:\\s+[a-zA-Z][a-zA-Z'-]*)?)`,
+    "i"
+  ),
+  /\b(?:i am|i'm|call me)\b(?:,?\s*(?:uh|um|er))*,?\s+([a-zA-Z][a-zA-Z'-]*(?:\s+[a-zA-Z][a-zA-Z'-]*)?)/i,
+  /\bthis is\s+([a-zA-Z][a-zA-Z'-]*(?:\s+[a-zA-Z][a-zA-Z'-]*)?)\s+(?:here|calling|speaking)\b/i,
+  /(?:customer(?:'s)?|caller(?:'s)?)\s+name\s+(?:is\s+)?([a-zA-Z][a-zA-Z'-]*(?:\s+[a-zA-Z][a-zA-Z'-]*)?)/i,
+  /\bnamed\s+([a-zA-Z][a-zA-Z'-]*(?:\s+[a-zA-Z][a-zA-Z'-]*)?)/i,
 ];
 
 const NAME_BLOCKLIST = new Set([
@@ -30,6 +41,29 @@ const NAME_BLOCKLIST = new Set([
   "this",
   "urgent",
   "emergency",
+  "denver",
+  "aurora",
+  "lakewood",
+  "plumbing",
+  "hvac",
+  "looking",
+  "calling",
+  "speaking",
+  "here",
+  "there",
+  "shortly",
+  "confirm",
+  "appointment",
+  "someone",
+  "contact",
+  "team",
+  "provided",
+  "stating",
+  "tomorrow",
+  "morning",
+  "okay",
+  "sure",
+  "race",
 ]);
 
 const TIME_PATTERNS = [
@@ -119,20 +153,109 @@ export function extractPhone(text: string, fallback?: string): string {
   return match?.[1]?.trim() ?? fallback ?? "";
 }
 
+function titleCaseName(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
 function isValidName(name: string): boolean {
   const trimmed = name.trim();
   if (!trimmed || trimmed.length < 2) return false;
-  const first = trimmed.split(/\s+/)[0].toLowerCase();
+  const words = trimmed.toLowerCase().split(/\s+/);
+  if (words.every((w) => NAME_BLOCKLIST.has(w))) return false;
+  const first = words[0];
   return !NAME_BLOCKLIST.has(first);
 }
 
-export function extractCustomerName(text: string): string {
+/** Caller answered a name question with a short reply (e.g. assistant: "Your name?" → user: "Bisrat") */
+function extractNameFromDirectAnswer(transcript: string): string {
+  const lines = transcript.split("\n");
+  let pendingNameQuestion = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (/^(assistant|bot|ai)\s*:/i.test(trimmed) || /^AI\s*:/i.test(trimmed)) {
+      pendingNameQuestion = /\b(?:your\s+name|name please|who am i speaking|may i (?:have|get) your name|what(?:'s| is) your name)\b/i.test(
+        trimmed
+      );
+      continue;
+    }
+
+    const userMatch = trimmed.match(/^(?:user|caller|human)\s*:\s*(.+)$/i);
+    if (!userMatch) continue;
+
+    const answer = userMatch[1].trim();
+
+    const introName = answer.match(
+      new RegExp(`\\bmy name(?:'s| is)${NAME_FILLER}\\s*,?\\s*([a-zA-Z][a-zA-Z'-]+)`, "i")
+    );
+    if (introName?.[1] && isValidName(introName[1])) {
+      return titleCaseName(introName[1]);
+    }
+
+    if (pendingNameQuestion && /^[a-zA-Z][a-zA-Z'-]*(?:\s+[a-zA-Z][a-zA-Z'-]*)?$/.test(answer)) {
+      if (isValidName(answer)) return titleCaseName(answer);
+    }
+    pendingNameQuestion = false;
+  }
+
+  return "";
+}
+
+/** Assistant often repeats the caller's name: "Thank you, Michael." */
+function extractNameFromAssistantConfirmation(transcript: string): string {
+  for (const line of transcript.split("\n")) {
+    const trimmed = line.trim();
+    if (!/^(assistant|bot|ai)\s*:/i.test(trimmed) && !/^AI\s*:/i.test(trimmed)) continue;
+    const match = trimmed.match(/\b(?:thank you|thanks),?\s+([a-zA-Z][a-zA-Z'-]+)\b/i);
+    if (match?.[1] && isValidName(match[1])) {
+      return titleCaseName(match[1]);
+    }
+  }
+  return "";
+}
+
+const SUMMARY_NAME_LEAD =
+  /^([a-zA-Z][a-zA-Z'-]*(?:\s+[a-zA-Z][a-zA-Z'-]*)?)\s+(?:called|requested|asked|needs|wanted|inquired)/i;
+
+function tryNamePatterns(text: string): string {
   for (const pattern of NAME_PATTERNS) {
     const match = text.match(pattern);
     if (match?.[1] && isValidName(match[1])) {
-      return match[1].trim();
+      return titleCaseName(match[1].trim());
     }
   }
+  return "";
+}
+
+export function extractCustomerName(
+  callerText: string,
+  summary = "",
+  fullTranscript = ""
+): string {
+  const summaryLead = summary.match(SUMMARY_NAME_LEAD);
+  if (summaryLead?.[1] && isValidName(summaryLead[1])) {
+    return titleCaseName(summaryLead[1].trim());
+  }
+
+  const fromCaller = tryNamePatterns(callerText);
+  if (fromCaller) return fromCaller;
+
+  if (fullTranscript) {
+    const fromDirect = extractNameFromDirectAnswer(fullTranscript);
+    if (fromDirect) return fromDirect;
+
+    const fromAssistant = extractNameFromAssistantConfirmation(fullTranscript);
+    if (fromAssistant) return fromAssistant;
+  }
+
+  const fromSummaryPatterns = tryNamePatterns(summary);
+  if (fromSummaryPatterns) return fromSummaryPatterns;
+
   return "";
 }
 
@@ -236,20 +359,30 @@ export function lookupPricing(serviceText: string): string | null {
 export function extractStructuredData(
   payload: VapiCallEndedPayload
 ): StructuredCallData {
-  const summary = payload.summary ?? "";
+  const summary = payload.summary?.trim() ?? "";
   const transcript = sanitizeTranscript(payload.transcript ?? "");
-  const combined = `${summary}\n${transcript}`.trim();
+  const callerFromTranscript = extractCallerText(transcript);
+  /** Caller speech only — avoids matching services/cities from assistant script */
+  const callerText = callerFromTranscript || transcript;
+  const phoneSource = `${callerText} ${summary}`.trim();
 
-  const isEmergency = detectEmergency(combined);
-  const intent = classifyIntent(combined, isEmergency);
+  const isEmergency =
+    detectEmergency(callerText) || (summary.length > 0 && detectEmergency(summary));
+  const intent = classifyIntent(callerText, isEmergency);
+  const serviceFromCaller = extractServiceNeeded(callerText);
+  const serviceNeeded =
+    serviceFromCaller ||
+    (callerFromTranscript ? "" : extractServiceNeeded(summary));
 
   return {
-    callerPhone: extractPhone(combined, payload.callerPhone),
+    callerPhone: extractPhone(phoneSource, payload.callerPhone),
     intent,
-    serviceNeeded: extractServiceNeeded(combined),
-    customerName: extractCustomerName(combined),
-    addressOrCity: extractServiceArea(combined),
-    preferredTime: extractPreferredTime(combined),
+    serviceNeeded,
+    customerName: extractCustomerName(callerText, summary, transcript),
+    addressOrCity:
+      extractServiceArea(callerText) || extractServiceArea(summary),
+    preferredTime:
+      extractPreferredTime(callerText) || extractPreferredTime(summary),
     isEmergency,
     summary,
     transcript,
