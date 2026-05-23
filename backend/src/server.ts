@@ -7,10 +7,10 @@ async function start(): Promise<void> {
   try {
     await runMigrations();
     app.listen(env.port, () => {
-      logInfo("Server started", {
-        port: env.port,
-        dashboard: `http://localhost:${env.port}`,
-        webhook: `http://localhost:${env.port}/vapi/call-ended`,
+      const base = `http://localhost:${env.hostPort}`;
+      logInfo(`Backend API → ${base}`, {
+        health: `${base}/health`,
+        webhook: `${base}/vapi/call-ended`,
       });
     });
   } catch (err) {

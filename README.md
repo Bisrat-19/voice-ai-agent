@@ -51,8 +51,6 @@ NGROK_AUTHTOKEN=your_token_here
 | `.env.example` (root) | Template for **Docker Compose / ngrok** — copy to `.env` at project root |
 | `backend/.env.example` | Template for **local backend dev** (`npm run dev`) — copy to `backend/.env` |
 
-Do not commit real `.env` files (they are gitignored).
-
 **2. Start all services**
 
 ```bash
