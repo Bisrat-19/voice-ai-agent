@@ -17,6 +17,12 @@
     "summary": "Caller asked about HVAC inspection pricing.",
     "transcript": "Caller: How much does an HVAC inspection cost?\nAssistant: Our HVAC inspection is eighty-nine dollars."
   },
+  "pricing_plumbing": {
+    "callId": "call_pricing_plumbing_001",
+    "callerPhone": "+15555550100",
+    "summary": "Caller asked about plumbing diagnostic pricing.",
+    "transcript": "Caller: How much is a plumbing diagnostic?\nAssistant: Our plumbing diagnostic is seventy-five dollars."
+  },
   "pricing_unknown": {
     "callId": "call_pricing_002",
     "callerPhone": "+15555550101",

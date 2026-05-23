@@ -24,13 +24,47 @@ Caller → Twilio → Vapi Assistant
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-- [ngrok](https://ngrok.com) account and [authtoken](https://dashboard.ngrok.com/get-started/your-authtoken)
-- Vapi assistant with Twilio number (already set up for this project)
+| Requirement | Notes |
+|---------------|--------|
+| [Docker](https://docs.docker.com/get-docker/) + Docker Compose | Runs backend, frontend, Postgres, and ngrok |
+| [Twilio](https://twilio.com) account | US (or supported) number with **Voice** enabled |
+| [Vapi](https://vapi.ai) account | Assistant + Twilio number import |
+| [ngrok](https://ngrok.com) account | Free tier is enough; [authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) required |
 
-## Setup and run
+## Setup guide
 
-**1. Clone and configure environment**
+End-to-end flow: **Twilio number → Vapi assistant → ngrok → this backend → Postgres dashboard**.
+
+### Summary (Twilio + Vapi)
+
+I purchased and configured a Twilio US phone number with voice support, then connected it to the Vapi assistant for inbound call handling. Incoming customer calls are routed from Twilio to Vapi, where the AI receptionist manages the conversation using the configured business rules and prompt. I verified the integration using real phone calls and confirmed successful call routing, voice interaction, and webhook event delivery to the backend.
+
+### Step 1 — Twilio phone number
+
+1. Sign in to the [Twilio Console](https://console.twilio.com).
+2. Go to **Phone Numbers** → **Manage** → **Buy a number** (or use an existing number).
+3. Choose a number with **Voice** capability (US numbers work well with Vapi).
+4. Complete purchase. No custom Twilio webhook or SIP setup is required for this project — **Vapi owns the voice routing** once the number is linked in Vapi (Step 2).
+
+**Inbound call path:** `Caller dials Twilio number` → `Twilio forwards audio to Vapi` → `Vapi runs the assistant`.
+
+### Step 2 — Vapi assistant
+
+1. Sign in to the [Vapi Dashboard](https://dashboard.vapi.ai).
+2. **Create an assistant** (or open your existing one).
+3. **System prompt** — include ABC Home Services rules, for example:
+   - Services, service areas (Denver, Aurora, Lakewood), and known pricing only
+   - Booking: collect name, phone, service, city/address, preferred time; do not confirm a real appointment
+   - Emergency: detect keywords (`burst pipe`, `gas leak`, `flooding`, `no heat`) and escalate
+   - Never invent pricing; keep replies short for phone calls
+4. **Import the Twilio number**
+   - In Vapi: **Phone Numbers** → **Import** / **Connect Twilio**
+   - Authorize your Twilio account and assign the number from Step 1 to this assistant
+5. **Publish** the assistant so inbound calls use the latest config.
+
+You do **not** point Twilio’s “A call comes in” webhook at your local server — Vapi handles the call. Your backend only receives **after-call** events (Step 4).
+
+### Step 3 — Clone and run this project
 
 ```bash
 git clone <repository-url>
@@ -40,24 +74,26 @@ cp .env.example .env
 
 Edit root `.env` and set your ngrok authtoken:
 
+```env
+NGROK_AUTHTOKEN=your_ngrok_authtoken_here
 ```
-NGROK_AUTHTOKEN=your_token_here
-```
-
-**Environment files**
 
 | File | Purpose |
 |------|---------|
-| `.env.example` (root) | Template for **Docker Compose / ngrok** — copy to `.env` at project root |
-| `backend/.env.example` | Template for **local backend dev** (`npm run dev`) — copy to `backend/.env` |
+| `.env` (project root) | `NGROK_AUTHTOKEN` for the ngrok container |
+| `backend/.env.example` | Copy to `backend/.env` only if you run the API with `npm run dev` locally |
 
-**2. Start all services**
+Start all services:
 
 ```bash
 docker compose up --build
 ```
 
-**3. Open the application**
+Wait until logs show:
+
+- **Frontend** — `http://localhost:8080`
+- **Backend** — `http://localhost:3000`
+- **ngrok inspector** — `http://localhost:4040`
 
 | Service | URL |
 |---------|-----|
@@ -66,21 +102,30 @@ docker compose up --build
 | Health check | http://localhost:3000/health |
 | ngrok inspector | http://localhost:4040 |
 
-**4. Connect Vapi to the webhook**
+### Step 4 — Connect Vapi to the webhook (ngrok)
 
-1. Open http://localhost:4040/status and copy the **HTTPS** forwarding URL.
-2. In the [Vapi Dashboard](https://dashboard.vapi.ai), open your assistant → **Advanced** → **Server URL**.
-3. Set:
+Vapi must reach your machine while developing. ngrok exposes the backend to the internet.
+
+1. Open **http://localhost:4040** (ngrok inspector).
+2. Copy the **HTTPS** public URL (e.g. `https://abc123.ngrok-free.app`).
+3. In Vapi Dashboard → your **Assistant** → **Advanced** (or **Server URL**).
+4. Set the server URL to:
 
    ```
    https://<your-ngrok-host>/vapi/call-ended
    ```
 
-4. Save and publish the assistant.
+   Example: `https://abc123.ngrok-free.app/vapi/call-ended`
 
-## Verify it works
+5. **Save** and **publish** the assistant.
 
-**Without a phone call** — send a test webhook:
+**Important:** If you restart Docker, ngrok may get a **new URL** — update the Vapi Server URL again.
+
+**What the backend stores:** Only Vapi `end-of-call-report` events (one row per completed call). Other events (`status-update`, `conversation-update`, etc.) return `200` with `skipped: true` and are not saved.
+
+### Step 5 — Verify the full flow
+
+#### Option A — Test webhook (no phone call)
 
 ```bash
 curl -X POST http://localhost:3000/vapi/call-ended \
@@ -95,7 +140,33 @@ curl -X POST http://localhost:3000/vapi/call-ended \
 
 Refresh http://localhost:8080 — the call should appear in the dashboard.
 
-**With a phone call** — call your Twilio number, complete a conversation, hang up, then check the dashboard and ngrok inspector (`POST /vapi/call-ended` → `200`).
+#### Option B — Real phone call
+
+1. Call your **Twilio number** (linked in Vapi).
+2. Talk to the assistant (e.g. booking, pricing, or emergency scenario).
+3. Hang up.
+4. Check:
+   - **Dashboard** — http://localhost:8080 (new row with transcript and fields)
+   - **ngrok** — http://localhost:4040 → `POST /vapi/call-ended` with status `200`
+   - **Backend logs** — `Call stored` with `callId` and `intent`
+
+### Submission: test calls & transcripts
+
+The assessment asks for **5 test call results** and **transcript/summary examples**.
+
+1. Run five real calls using the scripts in [docs/TEST_CALL_RESULTS.md](docs/TEST_CALL_RESULTS.md), **or** run `./scripts/send-test-webhooks.sh` to seed the database locally.
+2. Copy summary + transcript from the dashboard (or SQL export) into that doc.
+3. Submit `docs/TEST_CALL_RESULTS.md` with your repo (plus screenshots optional).
+
+### Quick reference — who does what
+
+| Component | Role |
+|-----------|------|
+| **Twilio** | Phone number; receives inbound calls |
+| **Vapi** | Voice AI, system prompt, conversation, sends webhooks when call ends |
+| **ngrok** | Public HTTPS tunnel to your local backend |
+| **Backend** (`POST /vapi/call-ended`) | Receives call data, extracts fields, saves to Postgres |
+| **Frontend** | Dashboard to view stored calls |
 
 ## Database access
 
